@@ -1,0 +1,110 @@
+#! /usr/bin/env sh
+if [ -f /etc/bbssh.conf]; then
+        . /etc/bbssh.conf
+elif [ -f /home/bbssh/.bbsshrc ]; then
+        . /home/bbssh/.bbsshrc
+elif [ -f $HOME/.bbsshservrc ]; then
+        . $HOME/.bbsshrc
+fi
+if [ -z "$BBSSH_OVERRIDE_TORSOCKS_CONF_FILE" ]; then
+        if [ -f "$BBSSH_OVERRIDE_TORSOCKS_CONF_FILE" ]; then
+                TORSOCKS_CONF_FILE="$BBSSH_OVERRIDE_TORSOCKS_CONF_FILE"
+        else
+                echo "Configuration of Torsocks failed! Check whether you have a configuration file at $BBSSH_OVERRIDE_TORSOCKS_CONF_FILE!" >> bbssherror.log
+        fi
+fi
+if [ ! -d "$BBSSH_CLIENT_STOR" ]; then
+        owner=$(ls -ld "$BBSSH_CLIENT_STOR" | awk '{print $3}')
+        whoiam=$(whoami)
+        if [ "$owner" != "$whoiam" ]; then
+                if id -u bbssh; then
+                        sudo mkdir -p "$BBSSH_CLIENT_STOR"
+                        sudo chown bbssh:bbssh "$BBSSH_CLIENT_STOR"
+                        sudo -u bbssh chmod u+rwx "$BBSSH_CLIENT_STOR"
+                        SU_COMMAND="sudo -u $TOR_BINARY"
+                fi
+        else
+                mkdir -p "$BBSSH_CLIENT_STOR"
+                SU_COMMAND="$TOR_BINARY "
+        fi
+fi
+if [ "$BBSSH_USE_I2P" == "YES" ]; then
+        BBSSH_ADDR_STRING="$BBSSH_USER@$BBSSH_I2P_PROXY_IPADDR:$BBSSH_I2P_PROXY_PORT" && BBSSH_USE_TOR="YES" || exit
+fi
+if [ "$BBSSH_USE_TOR" == "YES" ]; then
+        TOR_BINARY=$(which torsocks)
+        if [ -z "$TOR_BINARY" ]; then
+                echo "Configuration of Torsocks failed! Check whether you have the package installed correctly!" >> bbssherror.log
+        elif [ -f "$TOR_BINARY" ]; then
+                echo "Configuration of Torsocks failed! Check whether you have a binary at $TOR_BINARY!" >> bbssherror.log
+        fi
+        if [ -z "$BBSSH_TOR_HS_ADDR" ]; then
+                if [ -z "$BBSSH_TOR_HS_PORT" ]; then
+                        BBSSH_ADDR_STRING="$BBSSH_USER@$BBSSH_TOR_HS_ADDR:$BBSSH_TOR_HS_PORT"
+                else
+                        BBSSH_ADDR_STRING="$BBSSH_USER@$BBSSH_TOR_HS_ADDR:$BBSSH_PORT"
+                fi
+        fi
+else
+        BBSSH_ADDR_STRING="$BBSSH_USER@$BBSSH_SERVICE:$BBSSH_PORT"
+fi
+post(){
+        if [ -z "$BBSSH_SSH_KEY" ]; then
+                $SU_BINARY ssh -i $BBSSH_SSH_KEY $BBSSH_ADDR_STRING sh -c "bbssh-server post $1"
+        fi
+}
+dump(){
+        if [ -z "$BBSSH_SSH_KEY" ]; then
+                $SU_BINARY ssh -i $BBSSH_SSH_KEY $BBSSH_ADDR_STRING sh -c "bbssh-server find $1"
+        fi
+}
+srch(){
+        if [ -z "$BBSSH_SSH_KEY" ]; then
+                $SU_BINARY ssh -i $BBSSH_SSH_KEY $BBSSH_ADDR_STRING sh -c "bbssh-server read $1"
+        fi
+}
+if [ ! -f "$BBSSH_SSH_KEY" ]; then
+        ssh-keygen -t $BBSSH_SSH_KEYTYPE -b $BBSSH_SSH_KEYBITS -V $BBSSH_SSH_INTERVAL -f $BBSSH_SSH_KEY -C $BBSSH_SSH_ID
+fi
+if [ -f "$BBSSH_SSH_KEY" ]; then
+        if [ -z "$BBSSH_GPG_KEY" ]; then
+                echo "Working Anonymously"
+        elif [ ! -f "$BBSSH_GPG_KEY" ]; then
+                echo "%echo Generating a basic OpenPGP key
+Key-Type: $BBSSH_GPG_TYPE
+Key-Length: $BBSSH_GPG_BYTE
+Name-Real: $BBSSH_GPG_NAME
+Name-Email: $BBSSH_GPG_ID
+Expire-Date: $BBSSH_GPG_INTERVAL
+%commit
+%echo done" | gpg --gen-key --batch -
+        else
+                echo "Continuing normally with key: $BBSSH_GPG_KEY"
+        fi
+else
+        echo "No SSH Key found. Check for the presence of your SSH key at $BBSSH_SSH_KEY"
+        exit 1
+fi
+while getopts ":p:r:f:l" opt; do
+        case $opt in
+                p)
+                BBSSH_FINAL_MESSAGE=$(echo "$OPTARG $BBSSH_MESSAGE" > $BBSSH_CLIENT_STOR/tmp && gpg --clearsign $BBSSH_CLIENT_STOR/tmp)
+                post "$BBSSH_FINAL_MESSAGE"
+                ;;
+        r)
+                dump "$OPTARG $BBSSH_TOPIC"
+                ;;
+        f)
+                srch "$OPTARG $BBSSH_SEARCH"
+                ;;
+        l)
+                echo "" >&2
+                ;;
+        \?)
+                echo "Usage: "
+                echo "      bbssh -p \"\$BBSSH_MESSAGE\""
+                echo "      bbssh -r \"\$BBSSH_TOPIC\""
+                echo "      bbssh -l \"\$BBSSH_SEARCH\""
+                ;;
+        esac
+done

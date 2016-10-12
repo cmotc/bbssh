@@ -1,0 +1,150 @@
+#! /usr/bin/env -i sh
+if [ -f /etc/bbsshserv.conf]; then
+        . /etc/bbsshserv.conf
+elif [ -f /home/bbssh/.bbsshservrc ]; then
+        . /home/bbssh/.bbsshservrc
+elif [ -f $HOME/.bbsshservrc ]; then
+        . $HOME/.bbsshservrc
+fi
+if [ ! -d "$BBSSH_SERVER_LOGS" ]; then
+        owner=$(ls -ld "$BBSSH_SERVER_LOGS" | awk '{print $3}')
+        whoiam=$(whoami)
+        if [ "$owner" != "$whoiam" ]; then
+                if id -u bbssh; then
+                        sudo mkdir -p "$BBSSH_SERVER_LOGS"
+                        sudo chown bbssh:bbssh "$BBSSH_SERVER_LOGS"
+                        sudo -u bbssh chmod u+rw "$BBSSH_SERVER_LOGS"
+                        SU_COMMAND="sudo -u"
+                else
+                        sudo mkdir -p "$BBSSH_SERVER_LOGS"
+                        sudo chown bbssh:bbssh "$BBSSH_SERVER_LOGS"
+                        sudo chmod u+rwx "$BBSSH_SERVER_LOGS"
+                        sudo chmod g+rw "$BBSSH_SERVER_LOGS"
+                        SU_COMMAND="sudo"
+                fi
+        else
+                mkdir -p "$BBSSH_SERVER_LOGS"
+                SU_COMMAND=""
+        fi
+fi
+if [ ! -d "$BBSSH_SERVER_STOR" ]; then
+        owner=$(ls -ld "$BBSSH_SERVER_STOR" | awk '{print $3}')
+        whoiam=$(whoami)
+        if [ "$owner" != "$whoiam" ]; then
+                if id -u bbssh; then
+                        sudo mkdir -p "$BBSSH_SERVER_STOR"
+                        sudo chown bbssh:bbssh "$BBSSH_SERVER_STOR"
+                        sudo -u bbssh chmod u+rwx "$BBSSH_SERVER_STOR"
+                        SU_COMMAND="sudo -u"
+                else
+                        sudo mkdir -p "$BBSSH_SERVER_STOR"
+                        sudo chown bbssh:bbssh "$BBSSH_SERVER_STOR"
+                        sudo chmod u+rwx "$BBSSH_SERVER_STOR"
+                        sudo chmod g+rw "$BBSSH_SERVER_STOR"
+                        SU_COMMAND="sudo"
+                fi
+        else
+                mkdir -p "$BBSSH_SERVER_STOR"
+                SU_COMMAND=""
+        fi
+fi
+post(){
+        MSG_HASH=$(echo -n "$@" | sha256sum)
+        MSG_NAME="$2"
+        MSG_DATE=$(date +%Y%m%d)
+        MSG_FILE="$MSG_DATE-$MSG_NAME-$MSG_HASH.md"
+        echo "$@" | $SU_COMMAND tee "$BBSSH_SERVER_STOR/$MSG_FILE" 2> "$BBSSH_SERVER_LOGS/posts-$MSG_FILE.log"
+}
+dump(){
+        MSG_NAME="$2"
+        if [ -f $BBSSH_SERVER_STOR/*-$MSG_NAME-* ]; then
+                $SU_COMMAND cat $BBSSH_SERVER_STOR/*-$MSG_NAME-*
+        else
+                $SU_COMMAND cat $BBSSH_SERVER_STOR/*
+        fi
+}
+srch(){
+        SEARCH_STRING="$2"
+        IN_FOLDER=$(ls $BBSSH_SERVER_STOR/)
+        for i in $IN_FOLDER; do
+                TEST=$($SU_COMMAND cat $i | grep -i $SEARCH_STRING)
+                if [ -z "$TEST" ]; then
+                        echo $TEST
+                fi
+        done
+}
+OPTION="$1"
+if [ -z "$OPTION" ]; else
+        echo "Someone attempted to pass an empty message to the system" &> "$BBSSH_SERVER_LOGS/empties.log"
+fi
+if [ "$OPTION" == "post" ]; then
+        if [ -f $BBSSH_SERVER_STOR/*-$2-* ]; then
+                post "$@"
+        elif [ -f $BBSSH_PLUGIN_DIR/federate.sh ]; then
+                POST=fpost "$@"
+                if [ -z "$POST" ]; then
+                        post "$@"
+                else
+                        echo "Topic: $2 not found. Do you want to create a new topic?"
+                        select yn in "Yes" "No"; do
+                                case $yn in
+                                        Yes ) post "$@"; echo "$2" | $SU_COMMAND tee -a "$BBSSH_SERVER_LOGS/newtopic.log";;
+                                        No ) exit;;
+                                esac
+                        done
+                fi
+        else
+                echo "Topic: $2 not found. Do you want to create a new topic?"
+                select yn in "Yes" "No"; do
+                        case $yn in
+                                Yes ) post "$@"; echo "$2" | $SU_COMMAND tee -a "$BBSSH_SERVER_LOGS/newtopic.log";;
+                                No ) exit;;
+                        esac
+                done
+        fi
+elif [ "$OPTION" == "read" ]; then
+        if [ -f $BBSSH_SERVER_STOR/*-$2-* ]; then
+                dump "$2"
+        elif [ -f $BBSSH_PLUGIN_DIR/federate.sh ]; then
+                DUMP=fdump "$2"
+                if [ -z "$DUMP" ]; then
+                        echo $DUMP
+                else
+                        echo "Topic: $2 not found. Do you want to read out the whole forum?"
+                        select yn in "Yes" "No"; do
+                        case $yn in
+                                Yes ) dump; echo "$2" | $SU_COMMAND tee -a "$BBSSH_SERVER_LOGS/readdump.log";;
+                                No ) exit;;
+                        esac
+                done
+                fi
+        else
+                echo "Topic: $2 not found. Do you want to read out the whole forum?"
+                select yn in "Yes" "No"; do
+                        case $yn in
+                                Yes ) dump; echo "$2" | $SU_COMMAND tee -a "$BBSSH_SERVER_LOGS/readdump.log";;
+                                No ) exit;;
+                        esac
+                done
+        fi
+elif [ "$OPTION" == "find" ]; then
+        if [ -f $BBSSH_SERVER_STOR/* ]; then
+                srch "$2"
+        elif [ -f $BBSSH_PLUGIN_DIR/federate.sh ]; then
+                FIND=fsrch "$2"
+                if [ -z "$FIND" ]; then
+                        echo $FIND
+                else
+                        if [ "$BBSSH_LOG_SEARCH" == "YES" ]; then
+                                echo "Word: $2 not found. Do you need to find a different keyword?" | $SU_COMMAND tee -a "$BBSSH_SERVER_LOGS/searchfail.log"
+                        else
+                                echo "Word: $2 not found. Do you need to find a different keyword?"
+                        fi
+                fi
+        else
+                echo "Word: $2 not found. Do you need to find a different keyword?" | $SU_COMMAND tee -a "$BBSSH_SERVER_LOGS/searchfail.log"
+        fi
+else
+        echo "Someone attempted to use an invalid server-side option" | $SU_COMMAND tee -a "$BBSSH_SERVER_LOGS/invalids.log"
+fi
+exit
